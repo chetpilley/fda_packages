@@ -5,6 +5,7 @@ FDA Data Models
 import os, csv
 from dateutil import relativedelta
 from datetime import datetime
+from itertools import groupby
 
 base_directory =  os.path.dirname(os.path.abspath(__file__))
 product_file = os.path.join(base_directory, 'product.txt')
@@ -21,6 +22,13 @@ class Package(object):
         self.ndc_exclude_flag = excl
         self.sample_package = samp
         self.ndc11 = ''
+
+    def __str__(self):
+        return self.ndc11 + ' ' + self.package_description
+    
+    def __repr__(self):
+        return self.ndc11 + ' ' + self.package_description
+
 
 class Product(object):
     def __init__(self, pid, pndc, typnm, prpnm, prpnmsf, nonprpnm, dsg,
@@ -47,7 +55,13 @@ class Product(object):
         self.dea_schedule = deasc
         self.ndc_exclude_flag = excl
         self.listing_record_certified_through = lstng_rcrd_thr
-        self.ndc11 = ''
+        self.generic_start_date = None
+
+    def __str__(self):
+        return self.proprietary_name + ' ' + self.product_ndc
+
+    def __repr__(self):
+        return self.proprietary_name + ' ' + self.product_ndc
 
 
 def package_line_to_object(aline):
@@ -84,19 +98,15 @@ def get_packages():
 
     return packages
 
-def get_product_id_ndc11_xwalk():
-    packages = get_packages()
-    return dict([(x.product_id, x.ndc11) for x in packages])
-
-product_id_ndc11_xwalk = get_product_id_ndc11_xwalk()
-
 def product_line_to_object(aline):
     product = Product(*aline)
-    product.ndc11 =  product_id_ndc11_xwalk[product.product_id]
-    if product.start_marketing_date:
-        product.start_marketing_date = datetime.strptime(
-                product.start_marketing_date, '%Y%m%d'
-            )
+    substances = product.substance_name.split(';')
+    substances = [x.strip().upper() for x in substances]
+    substances.sort()
+    product.substance_name = substances
+    product.start_marketing_date = datetime.strptime(
+            product.start_marketing_date, '%Y%m%d'
+        )
     if product.end_marketing_date:
         product.end_marketing_date = datetime.strptime(
                     product.end_marketing_date, '%Y%m%d'
@@ -128,5 +138,68 @@ def get_products():
     
     return products
 
+products = []
 
+def cache_products(refresh=False):
+    if len(globals()['products']) == 0 or refresh == True:
+        globals()['products'] = get_products()
+
+    return globals()['products']
+
+def get_product_ndc_xwalk():
+    products = cache_products()
+    return dict([(x.product_ndc, x) for x in products])
+
+def get_generics_products():
+    products = cache_products()
+    generic_categories = ['ANDA', 'NDA AUTHORIZED GENERIC']
+    return list(
+            filter(
+                lambda x: x.marketing_category_name in generic_categories and x.substance_name, 
+                products
+                )
+            )
+
+
+def build_generic_products_start_dates():
+    generics = get_generics_products()
+    sortfunc = lambda x: ';'.join(x.substance_name) + x.start_marketing_date.strftime('%Y%m%d')
+    sgenerics = sorted(generics, key=sortfunc)
+    grpfunc = lambda x: ';'.join(x.substance_name)
+    keys = []
+    groups = []
+    out_generics = []
+    for key, grp in groupby(sgenerics, key=grpfunc):
+        grp_cache = list(grp)
+        if not key:
+            for product in grp_cache:
+                product.generic_start_date = product.start_marketing_date
+                out_generics.append(product)
+
+        else:
+            sdate = grp_cache[0].start_marketing_date
+            for product in grp_cache:
+                product.generic_start_date = sdate
+                out_generics.append(product)
+
+    return out_generics
+
+def get_generic_products_since_dobj(date_thresh):
+    generics = build_generic_products_start_dates()
+    return list(
+            filter(
+                lambda x: x.generic_start_date >= date_thresh,
+                generics
+                )
+            )
+
+def get_generic_packages_since_dobj(date_thresh):
+    generic_products = get_generic_products_since_dobj(date_thresh)
+    generic_product_ndcs = [x.product_ndc for x in generic_products]
+    return = list(
+                filter(
+                    lambda x: x.product_ndc in generic_product_ndcs,
+                    get_packages()
+                    )
+                )
 

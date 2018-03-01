@@ -1,6 +1,9 @@
 '''
 Fetch DB files
 
+Additional information on FDA DB files and definitions can be found
+at https://www.fda.gov/Drugs/InformationOnDrugs/ucm142438.htm
+
 To Do - Add Logging support
 
 '''

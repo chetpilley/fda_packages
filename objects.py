@@ -56,6 +56,7 @@ class Product(object):
         self.ndc_exclude_flag = excl
         self.listing_record_certified_through = lstng_rcrd_thr
         self.generic_start_date = None
+        self.brand_start_date = None
 
     def __str__(self):
         return self.proprietary_name + ' ' + self.product_ndc
@@ -100,10 +101,13 @@ def get_packages():
 
 def product_line_to_object(aline):
     product = Product(*aline)
+    assert product.product_type_name == 'HUMAN PRESCRIPTION DRUG'
     substances = product.substance_name.split(';')
     substances = [x.strip().upper() for x in substances]
     substances.sort()
+    product.proprietary_name = product.proprietary_name.upper().strip()
     product.substance_name = substances
+    product.non_proprietary_name = product.non_proprietary_name.strip()
     product.start_marketing_date = datetime.strptime(
             product.start_marketing_date, '%Y%m%d'
         )
@@ -134,9 +138,14 @@ def get_products():
 
         except:
             continue
-            #print('Could not create product from aline:\n\n' + '\n'.join(aline))
     
     return products
+
+
+'''
+Crosswalks, cacheing, and filtering examples
+
+'''
 
 products = []
 
@@ -150,12 +159,21 @@ def get_product_ndc_xwalk():
     products = cache_products()
     return dict([(x.product_ndc, x) for x in products])
 
+def get_generic_ndc_walk():
+    products = build_generic_products_start_dates()
+    return dict([(x.product_ndc, x) for x in products])
+
+def get_brand_ndc_walk():
+    products = build_brand_products_start_dates()
+    return dict([(x.product_ndc, x) for x in products])
+
+
 def get_generics_products():
     products = cache_products()
     generic_categories = ['ANDA', 'NDA AUTHORIZED GENERIC']
     return list(
             filter(
-                lambda x: x.marketing_category_name in generic_categories and x.substance_name, 
+                lambda x: x.marketing_category_name in generic_categories and x.non_proprietary_name, 
                 products
                 )
             )
@@ -163,9 +181,9 @@ def get_generics_products():
 
 def build_generic_products_start_dates():
     generics = get_generics_products()
-    sortfunc = lambda x: ';'.join(x.substance_name) + x.start_marketing_date.strftime('%Y%m%d')
+    sortfunc = lambda x: ';'.join(x.non_proprietary_name) + x.start_marketing_date.strftime('%Y%m%d')
     sgenerics = sorted(generics, key=sortfunc)
-    grpfunc = lambda x: ';'.join(x.substance_name)
+    grpfunc = lambda x: ';'.join(x.non_proprietary_name)
     keys = []
     groups = []
     out_generics = []
@@ -182,6 +200,26 @@ def build_generic_products_start_dates():
                 product.generic_start_date = sdate
                 out_generics.append(product)
 
+    sortfunc = lambda x: ';'.join(x.substance_name) + x.generic_start_date.strftime('%Y%m%d')
+    sgenerics = sorted(out_generics, key=sortfunc)
+    grpfunc = lambda x: ';'.join(x.substance_name)
+    keys = []
+    groups = []
+    out_generics = []
+    for key, grp in groupby(sgenerics, key=grpfunc):
+        grp_cache = list(grp)
+        if not key:
+            for product in grp_cache:
+                product.generic_start_date = product.generic_start_date
+                out_generics.append(product)
+
+        else:
+            sdate = grp_cache[0].generic_start_date
+            for product in grp_cache:
+                product.generic_start_date = sdate
+                out_generics.append(product)
+
+
     return out_generics
 
 def get_generic_products_since_dobj(date_thresh):
@@ -196,9 +234,62 @@ def get_generic_products_since_dobj(date_thresh):
 def get_generic_packages_since_dobj(date_thresh):
     generic_products = get_generic_products_since_dobj(date_thresh)
     generic_product_ndcs = [x.product_ndc for x in generic_products]
-    return = list(
+    return list(
                 filter(
                     lambda x: x.product_ndc in generic_product_ndcs,
+                    get_packages()
+                    )
+                )
+
+def get_brand_products():
+    products = cache_products()
+    brand_categories = ['NDA', 'BLA']
+    return list(
+            filter(
+                lambda x: x.marketing_category_name in brand_categories and x.proprietary_name, 
+                products
+                )
+            )
+
+
+def build_brand_products_start_dates():
+    brands = get_brand_products()
+    sortfunc = lambda x: ';'.join(x.non_proprietary_name) + x.start_marketing_date.strftime('%Y%m%d')
+    sbrands = sorted(brands, key=sortfunc)
+    grpfunc = lambda x: ';'.join(x.non_proprietary_name)
+    keys = []
+    groups = []
+    out_brands = []
+    for key, grp in groupby(sbrands, key=grpfunc):
+        grp_cache = list(grp)
+        if not key:
+            for product in grp_cache:
+                product.brand_start_date = product.start_marketing_date
+                out_brands.append(product)
+
+        else:
+            sdate = grp_cache[0].start_marketing_date
+            for product in grp_cache:
+                product.brand_start_date = sdate
+                out_brands.append(product)
+
+    return out_brands
+
+def get_brand_products_since_dobj(date_thresh):
+    brands = build_brand_products_start_dates()
+    return list(
+            filter(
+                lambda x: x.brand_start_date >= date_thresh,
+                brands
+                )
+            )
+
+def get_brand_packages_since_dobj(date_thresh):
+    brand_products = get_brand_products_since_dobj(date_thresh)
+    brand_product_ndcs = [x.product_ndc for x in brand_products]
+    return list(
+                filter(
+                    lambda x: x.product_ndc in brand_product_ndcs,
                     get_packages()
                     )
                 )
